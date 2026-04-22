@@ -29,6 +29,19 @@ Use this skill when the user wants to:
   - Tell them they can get an API key at **https://www.moodmax.cn** → top-right corner → **Settings**.
 - **Credits**: Each generation consumes credits; failed generations do not deduct credits
 
+## Skill Version
+
+**Current skill version**: `1.0.0`
+
+The API returns a `skillVersion` field in every response. The script automatically compares the local skill version with the API version:
+
+- **Major version mismatch** (e.g., API `2.x.x` vs skill `1.x.x`): A warning is printed — **you must upgrade** the skill files.
+- **Minor version mismatch** (e.g., API `1.2.x` vs skill `1.1.x`): A warning is printed — **recommend upgrading** for new features.
+- **Patch version mismatch**: No warning — compatible.
+
+When an upgrade is required, re-download the latest skill files from:  
+**https://github.com/daimali/gpt-image2-skill.git**
+
 ## How it works
 
 Image generation is an **asynchronous** process with two steps:
@@ -46,6 +59,8 @@ Step 3: POST /open_api/v2/query-task -> status
 ```
 
 Polling: every 3 seconds, up to 100 times (~5 min timeout).
+
+Note: The API returns `status="processing"` until the image is both generated **and** transferred to OSS. The task is only considered `completed` when the final URL is ready. No need to handle `url: null` — just keep polling until `status="completed"`.
 
 ## Tool: Generate Image
 

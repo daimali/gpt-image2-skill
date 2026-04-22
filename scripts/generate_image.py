@@ -12,14 +12,59 @@ import argparse
 import json
 import sys
 import time
+import warnings
 from typing import Optional
 
 import requests
 
 
+# Skill 版本号 —— 与 API 返回的 skillVersion 对比，不匹配时提示用户升级
+# 格式: 主版本.次版本.修订号
+SKILL_VERSION = "1.0.0"
+
 BASE_URL = "https://www.moodmax.cn/open_api/v2"
 POLL_INTERVAL = 3  # seconds
 MAX_POLL = 100     # max ~5 minutes
+
+
+def _parse_version(version_str: str) -> tuple[int, int, int]:
+    """Parse version string like '1.2.3' into (1, 2, 3)."""
+    try:
+        parts = version_str.split(".")
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except (ValueError, IndexError):
+        return (0, 0, 0)
+
+
+def _check_skill_version(api_version: Optional[str]) -> None:
+    """
+    Compare local SKILL_VERSION with API's skillVersion.
+    Print a warning if the API has a newer major/minor version.
+    """
+    if not api_version:
+        return
+
+    local = _parse_version(SKILL_VERSION)
+    remote = _parse_version(api_version)
+
+    if remote[0] > local[0]:
+        # Major version mismatch — breaking change, must upgrade
+        warnings.warn(
+            f"\n[Skill Upgrade Required] Your skill version is {SKILL_VERSION}, "
+            f"but the API requires {api_version}.\n"
+            f"Please download and reinstall the latest skill files:\n"
+            f"  https://github.com/daimali/gpt-image2-skill.git\n",
+            UserWarning
+        )
+    elif remote[0] == local[0] and remote[1] > local[1]:
+        # Minor version mismatch — new features available, recommend upgrade
+        warnings.warn(
+            f"\n[Skill Upgrade Recommended] Your skill version is {SKILL_VERSION}, "
+            f"but the API has newer features in {api_version}.\n"
+            f"Consider downloading the latest skill files:\n"
+            f"  https://github.com/daimali/gpt-image2-skill.git\n",
+            UserWarning
+        )
 
 
 def create_task(
@@ -34,6 +79,7 @@ def create_task(
         "apiKey": api_key,
         "modelCode": "gpt-image-2",
         "prompt": prompt,
+        "skillVersion": SKILL_VERSION,
         "params": {
             "size": size,
             "n": n
@@ -46,7 +92,9 @@ def create_task(
     if data.get("code") != 0:
         raise RuntimeError(f"Create task failed: {data.get('message')} (code={data.get('code')})")
 
-    return data["data"]
+    result = data["data"]
+    _check_skill_version(result.get("skillVersion"))
+    return result
 
 
 def query_task(api_key: str, task_id: int) -> dict:
@@ -63,27 +111,9 @@ def query_task(api_key: str, task_id: int) -> dict:
     if data.get("code") != 0:
         raise RuntimeError(f"Query task failed: {data.get('message')} (code={data.get('code')})")
 
-    return data["data"]
-
-
-def _get_image_url(result: dict) -> Optional[str]:
-    """
-    Extract image URL from task result.
-    Handles both direct url and OSS-transfer fallback.
-    """
-    output_files = result.get("outputFiles", [])
-    if not output_files:
-        return None
-
-    first_file = output_files[0]
-    url = first_file.get("url")
-
-    # If url is null/empty but the task is completed, it may still be in OSS transfer.
-    # The API now falls back to original_url when url is empty, so this should rarely happen.
-    if not url and result.get("status") == "completed":
-        return None
-
-    return url
+    result = data["data"]
+    _check_skill_version(result.get("skillVersion"))
+    return result
 
 
 def generate_image(
@@ -96,7 +126,10 @@ def generate_image(
     verbose: bool = False
 ) -> dict:
     """
-    Generate an image and wait for completion.
+    Generate an image and wait for completion (including OSS transfer).
+
+    The API returns status="processing" until the image is both generated **and**
+    transferred to OSS. The task is only considered `completed` when the final URL is ready.
 
     Returns:
         dict: The final task data with status "completed" and outputFiles.
@@ -116,34 +149,28 @@ def generate_image(
 
         if verbose:
             progress = result.get("progress", 0)
-            need_transfer = result.get("needTransfer", False)
-            transfer_status = result.get("transferStatus", "")
-            url = _get_image_url(result)
+            output_files = result.get("outputFiles", [])
+            url = output_files[0].get("url") if output_files else None
             print(
                 f"[Poll {i+1}/{max_poll}] status={status}, progress={progress}%, "
-                f"needTransfer={need_transfer}, transferStatus={transfer_status}, url={'yes' if url else 'no'}"
+                f"url={'yes' if url else 'no'}"
             )
 
         if status == "completed":
-            # Check if we have a usable URL
-            image_url = _get_image_url(result)
-
-            if image_url:
+            output_files = result.get("outputFiles", [])
+            if output_files and output_files[0].get("url"):
                 if verbose:
-                    print(f"[Done] Image URL: {image_url}")
+                    print(f"[Done] Image URL: {output_files[0]['url']}")
                 return result
-            elif result.get("needTransfer") and result.get("transferStatus") == "pending":
-                # OSS transfer is still in progress, continue polling
-                if verbose:
-                    print(f"[Transfer] Image generated, waiting for OSS transfer...")
-                continue
             else:
+                # Should not happen if API logic is correct, but handle gracefully
                 raise RuntimeError(
                     f"Image generation completed but no URL available. "
-                    f"outputFiles={result.get('outputFiles')}"
+                    f"outputFiles={output_files}"
                 )
         elif status == "failed":
             raise RuntimeError(f"Image generation failed: {result.get('errorMessage', 'Unknown error')}")
+        # else: processing / submitted -> keep polling
 
     raise TimeoutError(f"Image generation timed out after {max_poll * poll_interval} seconds")
 
