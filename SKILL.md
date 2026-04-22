@@ -40,38 +40,35 @@ Image generation is an **asynchronous** process with two steps:
 Step 1: POST /open_api/v2/create-task -> taskId
 Step 2: Wait 3-5 seconds
 Step 3: POST /open_api/v2/query-task -> status
-         ├─ "completed" -> get image URL ✅
+         ├─ "completed" -> get image URL
          ├─ "processing" -> wait 3s, back to Step 3
-         └─ "failed" -> report error ❌
+         └─ "failed" -> report error
 ```
 
 Polling: every 3 seconds, up to 100 times (~5 min timeout).
 
-## Tool 1: Create image task
+## Tool: Generate Image
+
+**Execute the bundled Python script** `scripts/generate_image.py` directly:
 
 ```bash
-curl -X POST https://www.moodmax.cn/open_api/v2/create-task \
-  -H "Content-Type: application/json" \
-  -d '{
-    "apiKey": "<API_KEY>",
-    "modelCode": "gpt-image-2",
-    "prompt": "A serene Japanese garden with cherry blossoms, soft morning light, watercolor painting style",
-    "params": {
-      "size": "16:9",
-      "n": 1
-    }
-  }'
+python scripts/generate_image.py \
+  --api-key "YOUR_API_KEY" \
+  --prompt "A serene Japanese garden with cherry blossoms, watercolor style" \
+  --size 16:9 \
+  --n 1 \
+  --verbose
 ```
 
 **Parameters**:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| apiKey | string | Yes | API key |
-| modelCode | string | Yes | Fixed: `gpt-image-2` |
-| prompt | string | Yes | Image description (English works best) |
-| params.size | string | No | Aspect ratio. Default: `1:1` |
-| params.n | integer | No | Number of images. Default: `1`, Max: `4` |
+| `--api-key` | string | Yes | API key |
+| `--prompt` | string | Yes | Image description (English works best) |
+| `--size` | string | No | Aspect ratio. Default: `16:9` |
+| `--n` | integer | No | Number of images. Default: `1`, Max: `4` |
+| `--verbose` | boolean | No | Show progress logs |
 
 **Size options**:
 
@@ -89,65 +86,51 @@ curl -X POST https://www.moodmax.cn/open_api/v2/create-task \
 **Response**:
 ```json
 {
-  "code": 0,
-  "message": "success",
-  "data": {
-    "taskId": 12345,
-    "taskCode": "T20250115001A1B2C3D",
-    "status": "submitted"
-  }
+  "taskId": 12345,
+  "status": "completed",
+  "progress": 100,
+  "outputFiles": [
+    {
+      "url": "https://cdn.example.com/images/abc123.jpg",
+      "type": "image/jpeg"
+    }
+  ]
 }
 ```
 
-## Tool 2: Query task status
+**Or use the Python functions directly** in your code:
 
-```bash
-curl -X POST https://www.moodmax.cn/open_api/v2/query-task \
-  -H "Content-Type: application/json" \
-  -d '{
-    "apiKey": "<API_KEY>",
-    "taskId": 12345
-  }'
+```python
+from scripts.generate_image import generate_image
+
+result = generate_image(
+    api_key="YOUR_API_KEY",
+    prompt="A serene mountain lake at sunset, photorealistic",
+    size="16:9",
+    n=1,
+    verbose=True
+)
+print(result["outputFiles"][0]["url"])
 ```
 
-**Parameters**:
+## API Reference (for custom integration)
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| apiKey | string | Yes | API key |
-| taskId | integer | Yes | From create-task response |
+### Create task
 
-**Response (completed)**:
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "taskId": 12345,
-    "status": "completed",
-    "progress": 100,
-    "outputFiles": [
-      {
-        "url": "https://cdn.example.com/images/abc123.jpg",
-        "type": "image/jpeg"
-      }
-    ]
-  }
-}
+```python
+from scripts.generate_image import create_task
+
+task = create_task(api_key, prompt, size="1:1", n=1)
+# Returns: {"taskId": 12345, "taskCode": "T2025...", "status": "submitted"}
 ```
 
-**Response (processing)**:
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "taskId": 12345,
-    "status": "processing",
-    "progress": 65,
-    "outputFiles": []
-  }
-}
+### Query task
+
+```python
+from scripts.generate_image import query_task
+
+result = query_task(api_key, task_id=12345)
+# Returns: {"taskId": 12345, "status": "completed", "outputFiles": [...]}
 ```
 
 ## Prompt writing guide
