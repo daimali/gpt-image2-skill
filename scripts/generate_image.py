@@ -66,6 +66,26 @@ def query_task(api_key: str, task_id: int) -> dict:
     return data["data"]
 
 
+def _get_image_url(result: dict) -> Optional[str]:
+    """
+    Extract image URL from task result.
+    Handles both direct url and OSS-transfer fallback.
+    """
+    output_files = result.get("outputFiles", [])
+    if not output_files:
+        return None
+
+    first_file = output_files[0]
+    url = first_file.get("url")
+
+    # If url is null/empty but the task is completed, it may still be in OSS transfer.
+    # The API now falls back to original_url when url is empty, so this should rarely happen.
+    if not url and result.get("status") == "completed":
+        return None
+
+    return url
+
+
 def generate_image(
     api_key: str,
     prompt: str,
@@ -96,12 +116,32 @@ def generate_image(
 
         if verbose:
             progress = result.get("progress", 0)
-            print(f"[Poll {i+1}/{max_poll}] status={status}, progress={progress}%")
+            need_transfer = result.get("needTransfer", False)
+            transfer_status = result.get("transferStatus", "")
+            url = _get_image_url(result)
+            print(
+                f"[Poll {i+1}/{max_poll}] status={status}, progress={progress}%, "
+                f"needTransfer={need_transfer}, transferStatus={transfer_status}, url={'yes' if url else 'no'}"
+            )
 
         if status == "completed":
-            if verbose:
-                print(f"[Done] Image URL: {result['outputFiles'][0]['url']}")
-            return result
+            # Check if we have a usable URL
+            image_url = _get_image_url(result)
+
+            if image_url:
+                if verbose:
+                    print(f"[Done] Image URL: {image_url}")
+                return result
+            elif result.get("needTransfer") and result.get("transferStatus") == "pending":
+                # OSS transfer is still in progress, continue polling
+                if verbose:
+                    print(f"[Transfer] Image generated, waiting for OSS transfer...")
+                continue
+            else:
+                raise RuntimeError(
+                    f"Image generation completed but no URL available. "
+                    f"outputFiles={result.get('outputFiles')}"
+                )
         elif status == "failed":
             raise RuntimeError(f"Image generation failed: {result.get('errorMessage', 'Unknown error')}")
 
@@ -112,7 +152,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate images with GPT Image 2.0")
     parser.add_argument("--api-key", required=True, help="Your API key from https://www.moodmax.cn")
     parser.add_argument("--prompt", required=True, help="Image description (English works best)")
-    parser.add_argument("--size", default="1:1", help="Aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:2, 2:3, 21:9, 9:21")
+    parser.add_argument("--size", default="16:9", help="Aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:2, 2:3, 21:9, 9:21")
     parser.add_argument("--n", type=int, default=1, help="Number of images (1-4)")
     parser.add_argument("--verbose", action="store_true", help="Show progress logs")
 
